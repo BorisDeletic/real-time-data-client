@@ -50,12 +50,50 @@ class PolymarketWSClient:
         self.ping_task: Optional[asyncio.Task] = None
         self.running = False
         self.ssl_verify = ssl_verify
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
         
         # Initialize Web3 if provider is specified
         self.web3 = Web3(Web3.HTTPProvider(web3_provider)) if web3_provider else None
 
+    def _get_loop(self) -> asyncio.AbstractEventLoop:
+        """Get the event loop for the current context."""
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        return loop
+
+    async def _handle_connect_callback(self):
+        """Handle the connection callback safely."""
+        if self.on_connect_callback:
+            try:
+                if asyncio.iscoroutinefunction(self.on_connect_callback):
+                    await self.on_connect_callback(self)
+                else:
+                    await asyncio.get_running_loop().run_in_executor(
+                        None, self.on_connect_callback, self
+                    )
+            except Exception as e:
+                logger.error(f"Error in connect callback: {e}")
+
+    async def _handle_message_callback(self, msg: Message):
+        """Handle the message callback safely."""
+        if self.on_message_callback:
+            try:
+                if asyncio.iscoroutinefunction(self.on_message_callback):
+                    await self.on_message_callback(self, msg)
+                else:
+                    await asyncio.get_running_loop().run_in_executor(
+                        None, self.on_message_callback, self, msg
+                    )
+            except Exception as e:
+                logger.error(f"Error in message callback: {e}")
+
     async def connect(self):
         """Connect to the WebSocket server."""
+        self._loop = asyncio.get_running_loop()
+        
         while True:
             try:
                 # Configure SSL context
@@ -76,13 +114,11 @@ class PolymarketWSClient:
                     self.running = True
                     logger.info(f"Connected to {self.host}")
                     
-                    if self.on_connect_callback:
-                        await asyncio.get_event_loop().run_in_executor(
-                            None, self.on_connect_callback, self
-                        )
+                    # Handle connect callback
+                    await self._handle_connect_callback()
 
                     # Start ping loop
-                    self.ping_task = asyncio.create_task(self._ping_loop())
+                    self.ping_task = self._loop.create_task(self._ping_loop())
                     
                     try:
                         await self._message_loop()
@@ -150,10 +186,7 @@ class PolymarketWSClient:
                         payload=parsed_payload
                     )
                     
-                    if self.on_message_callback:
-                        await asyncio.get_event_loop().run_in_executor(
-                            None, self.on_message_callback, self, msg
-                        )
+                    await self._handle_message_callback(msg)
                 else:
                     logger.debug(f"Received message: {message}")
             except json.JSONDecodeError:
@@ -201,4 +234,12 @@ class PolymarketWSClient:
 
     def run(self):
         """Run the client in the current thread."""
-        asyncio.get_event_loop().run_until_complete(self.connect()) 
+        loop = self._get_loop()
+        try:
+            loop.run_until_complete(self.connect())
+        except KeyboardInterrupt:
+            logger.info("Shutting down...")
+            if self.websocket:
+                loop.run_until_complete(self.disconnect())
+        finally:
+            loop.close() 

@@ -8,7 +8,7 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 
-def on_connect(client):
+async def on_connect(client):
     """Callback when connection is established."""
     print("Connected to Polymarket WebSocket server")
     
@@ -22,12 +22,10 @@ def on_connect(client):
         ]
     )
     
-    # Note: Since we're in a callback, we need to use asyncio to run the coroutine
-    import asyncio
-    loop = asyncio.get_event_loop()
-    loop.create_task(client.subscribe(subscription))
+    # Since we're using async/await, we can directly await the subscription
+    await client.subscribe(subscription)
 
-def on_message(client, message):
+async def on_message(client, message):
     """Callback for handling incoming messages."""
     print(f"\nReceived message:")
     print(f"Topic: {message.topic}")
